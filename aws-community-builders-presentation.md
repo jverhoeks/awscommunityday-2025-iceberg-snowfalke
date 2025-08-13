@@ -13,13 +13,14 @@
 
 ## Agenda
 
-1. **The Integration Challenge** (5 min)
-2. **Apache Iceberg: The Foundation** (10 min)
-3. **S3 Tables: AWS Managed Iceberg** (8 min)
-4. **Snowflake Integration Strategy** (10 min)
-5. **Cost & Performance Analysis** (5 min)
-6. **The Open Ecosystem** (2 min)
-7. **Live Demo** (10 min)
+1. **The Integration Challenge** (4 min)
+2. **Apache Iceberg: The Foundation** (8 min)
+3. **Iceberg Metadata Deep Dive** (8 min)
+4. **S3 Tables: AWS Managed Iceberg** (6 min)
+5. **Snowflake Integration Strategy** (8 min)
+6. **Cost & Performance Analysis** (4 min)
+7. **The Open Ecosystem** (2 min)
+8. **Live Demo** (10 min)
 
 ---
 
@@ -146,7 +147,412 @@ Result: 288 files/day × 365 days = 105,120 files/year!
 
 ---
 
-## 3. S3 Tables: AWS Managed Iceberg 🚀
+## 3. Iceberg Metadata Deep Dive 🔍
+
+### The Iceberg Metadata System on S3
+
+**Understanding how Iceberg manages metadata is crucial for AWS architects**
+
+#### The Three-Layer Metadata Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TABLE METADATA                           │
+│  s3://bucket/warehouse/table/metadata/v1.metadata.json     │
+│  ├── Schema (columns, types, IDs)                          │
+│  ├── Partition Spec (partitioning strategy)                │
+│  ├── Sort Order (optimization hints)                       │
+│  ├── Current Snapshot ID                                   │
+│  └── Snapshot History                                      │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   SNAPSHOT METADATA                        │
+│  s3://bucket/warehouse/table/metadata/snap-12345.avro      │
+│  ├── Snapshot ID & Timestamp                               │
+│  ├── Operation Summary (added/deleted files)               │
+│  ├── Manifest List Location                                │
+│  └── Schema ID Used                                        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  MANIFEST FILES                            │
+│  s3://bucket/warehouse/table/metadata/manifest-abc.avro    │
+│  ├── Data File Paths                                       │
+│  ├── Partition Values                                      │
+│  ├── Record Counts                                         │
+│  ├── File Sizes                                            │
+│  └── Column Statistics (min/max/null counts)               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    DATA FILES                              │
+│  s3://bucket/warehouse/table/data/file-001.parquet         │
+│  s3://bucket/warehouse/table/data/file-002.parquet         │
+│  s3://bucket/warehouse/table/data/file-003.parquet         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How Metadata Enables ACID on S3
+
+#### The Atomic Commit Process
+
+```
+1. Writer prepares new data files
+   └── Writes: s3://bucket/table/data/new-file-001.parquet
+
+2. Writer creates new manifest
+   └── Writes: s3://bucket/table/metadata/manifest-new.avro
+   └── References: new-file-001.parquet + existing files
+
+3. Writer creates new snapshot
+   └── Writes: s3://bucket/table/metadata/snap-67890.avro
+   └── References: manifest-new.avro
+
+4. Writer updates table metadata (ATOMIC OPERATION)
+   └── Writes: s3://bucket/table/metadata/v2.metadata.json
+   └── Updates: current-snapshot-id = 67890
+
+5. Commit complete - readers see new data atomically
+```
+
+**Key insight:** Only step 4 is atomic. If it fails, no partial state is visible to readers.
+
+---
+
+### Metadata Growth: The Hidden Challenge
+
+#### Real-World Metadata Explosion
+
+```
+Streaming Table Example (1 insert/minute):
+├── Day 1: 1,440 snapshots, 1,440 manifests
+├── Week 1: 10,080 snapshots, 10,080 manifests  
+├── Month 1: 43,200 snapshots, 43,200 manifests
+└── Year 1: 525,600 snapshots, 525,600 manifests
+
+Metadata Storage Growth:
+├── Snapshots: ~100KB each = 52GB/year
+├── Manifests: ~50KB each = 26GB/year
+└── Total metadata: 78GB for 1 year of streaming!
+```
+
+#### Query Planning Impact
+
+```sql
+-- Query planning process for each query:
+1. Read table metadata (1 S3 GET)
+2. Read current snapshot (1 S3 GET)  
+3. Read manifest list (1 S3 GET)
+4. Read ALL manifests (N S3 GETs) ← This scales with writes!
+5. Filter manifests by query predicates
+6. Generate file list for scan
+
+-- With 43,200 manifests (1 month streaming):
+-- Query planning = 43,203 S3 API calls before reading data!
+```
+
+---
+
+### Self-Managed vs S3 Tables: The Operational Reality
+
+#### Self-Managed Iceberg on S3
+
+```yaml
+What You Manage:
+  Metadata Compaction:
+    - Manifest file consolidation
+    - Snapshot expiration policies  
+    - Orphan file cleanup
+    - Metadata size monitoring
+
+  Performance Optimization:
+    - File size optimization
+    - Partition layout tuning
+    - Sort order management
+    - Statistics collection
+
+  Operational Tasks:
+    - Monitoring metadata growth
+    - Scheduling maintenance jobs
+    - Handling failed operations
+    - Capacity planning
+
+  Infrastructure:
+    - Compute for maintenance (Spark/Trino)
+    - Monitoring and alerting
+    - Job orchestration (Airflow/Step Functions)
+    - Cost tracking and optimization
+```
+
+#### S3 Tables Managed Iceberg
+
+```yaml
+What AWS Manages:
+  Automatic Maintenance:
+    ✅ Manifest compaction (every few hours)
+    ✅ Snapshot expiration (configurable retention)
+    ✅ Orphan file cleanup (automatic garbage collection)
+    ✅ Metadata optimization (intelligent consolidation)
+
+  Performance Optimization:
+    ✅ File size optimization (target 128-256MB)
+    ✅ Z-ordering for better compression
+    ✅ Partition pruning optimization
+    ✅ Column statistics maintenance
+
+  Operational Excellence:
+    ✅ 99.9% availability SLA
+    ✅ Automatic scaling
+    ✅ Built-in monitoring
+    ✅ Cost optimization
+
+  What You Control:
+    - Table schema and partitioning strategy
+    - Data ingestion patterns
+    - Query access patterns
+    - Retention policies
+```
+
+---
+
+### The Catalog Ecosystem: Beyond Glue
+
+#### Catalog Options Comparison
+
+| Catalog Type | Use Case | Pros | Cons |
+|--------------|----------|------|------|
+| **AWS Glue Catalog** | AWS-native integration | ✅ Serverless<br>✅ IAM integration<br>✅ Cost-effective | ❌ AWS-only<br>❌ Limited metadata<br>❌ No fine-grained permissions |
+| **Iceberg REST Catalog** | Multi-cloud, enterprise | ✅ Vendor agnostic<br>✅ Fine-grained security<br>✅ Rich metadata | ❌ More complex<br>❌ Additional infrastructure |
+| **Apache Polaris** | Open source enterprise | ✅ Open source<br>✅ Multi-engine support<br>✅ Advanced governance | ❌ Self-managed<br>❌ Operational overhead |
+| **Tabular** | Managed service | ✅ Fully managed<br>✅ Performance optimized<br>✅ Enterprise features | ❌ Vendor lock-in<br>❌ Cost |
+
+---
+
+### AWS Glue Catalog Deep Dive
+
+#### How Glue Stores Iceberg Metadata
+
+```json
+{
+  "Name": "user_events",
+  "DatabaseName": "analytics",
+  "StorageDescriptor": {
+    "Location": "s3://bucket/warehouse/analytics/user_events/data/",
+    "InputFormat": "org.apache.iceberg.mr.hive.HiveIcebergInputFormat",
+    "OutputFormat": "org.apache.iceberg.mr.hive.HiveIcebergOutputFormat",
+    "SerdeInfo": {
+      "SerializationLibrary": "org.apache.iceberg.mr.hive.HiveIcebergSerDe"
+    }
+  },
+  "Parameters": {
+    "table_type": "ICEBERG",
+    "metadata_location": "s3://bucket/warehouse/analytics/user_events/metadata/v1.metadata.json",
+    "iceberg.table.type": "ICEBERG"
+  }
+}
+```
+
+#### Glue Catalog Limitations
+
+```yaml
+Limitations:
+  - No table-level permissions (only database-level)
+  - Limited metadata search capabilities
+  - No audit trail for table access
+  - No column-level lineage
+  - Basic schema evolution support
+
+Workarounds:
+  - Use Lake Formation for fine-grained permissions
+  - Implement custom metadata management
+  - Use AWS CloudTrail for audit logging
+  - Build custom lineage tracking
+```
+
+---
+
+### Iceberg REST Catalog: The Future
+
+#### REST API Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Spark App     │    │   Snowflake      │    │   Trino         │
+│                 │    │                  │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌──────────────────────┐
+                    │  Iceberg REST API    │
+                    │  (Authentication &   │
+                    │   Authorization)     │
+                    └──────────────────────┘
+                                 │
+                    ┌──────────────────────┐
+                    │   Metadata Store     │
+                    │  (PostgreSQL/DynamoDB│
+                    │   + S3 for files)    │
+                    └──────────────────────┘
+```
+
+#### REST Catalog Benefits
+
+```yaml
+Enterprise Features:
+  Authentication:
+    - OAuth2/JWT token-based
+    - Integration with enterprise identity providers
+    - Multi-factor authentication support
+
+  Authorization:
+    - Table-level permissions (READ/WRITE/DELETE)
+    - Column-level access control
+    - Row-level security policies
+    - Namespace-based isolation
+
+  Governance:
+    - Complete audit trail
+    - Data lineage tracking
+    - Schema evolution history
+    - Access pattern analytics
+
+  Multi-Engine Support:
+    - Consistent metadata across all engines
+    - Credential vending for secure S3 access
+    - Engine-specific optimizations
+    - Cross-engine compatibility
+```
+
+---
+
+### Apache Polaris: Open Source Enterprise Catalog
+
+#### Polaris Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Apache Polaris                          │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
+│  │   REST API      │  │   Management    │  │   Security  │  │
+│  │   Server        │  │   Console       │  │   Layer     │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
+│  │   Metadata      │  │   Policy        │  │   Audit     │  │
+│  │   Management    │  │   Engine        │  │   Logging   │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│                   Storage Layer                             │
+│  ┌─────────────────┐              ┌─────────────────┐       │
+│  │   PostgreSQL    │              │       S3        │       │
+│  │   (Metadata)    │              │   (Data Files)  │       │
+│  └─────────────────┘              └─────────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Polaris vs Managed Solutions
+
+```yaml
+Apache Polaris:
+  Pros:
+    ✅ Open source (Apache 2.0 license)
+    ✅ No vendor lock-in
+    ✅ Full control over deployment
+    ✅ Extensible architecture
+    ✅ Community-driven development
+
+  Cons:
+    ❌ Self-managed infrastructure
+    ❌ Operational complexity
+    ❌ Need expertise for optimization
+    ❌ Responsibility for high availability
+    ❌ Security configuration complexity
+
+AWS Glue + S3 Tables:
+  Pros:
+    ✅ Fully managed
+    ✅ AWS-native integration
+    ✅ Automatic scaling
+    ✅ Built-in security
+    ✅ Cost-effective for AWS workloads
+
+  Cons:
+    ❌ AWS ecosystem lock-in
+    ❌ Limited customization
+    ❌ Basic governance features
+    ❌ Less flexibility for multi-cloud
+```
+
+---
+
+### Choosing Your Catalog Strategy
+
+#### Decision Matrix
+
+```yaml
+Choose AWS Glue Catalog When:
+  - Primarily AWS-based architecture
+  - Simple governance requirements
+  - Cost optimization is priority
+  - Limited operational resources
+  - Standard Iceberg features sufficient
+
+Choose Iceberg REST Catalog When:
+  - Multi-cloud or hybrid architecture
+  - Advanced governance requirements
+  - Fine-grained security needed
+  - Multiple compute engines
+  - Enterprise compliance requirements
+
+Choose Apache Polaris When:
+  - Open source preference
+  - Full control requirements
+  - Custom governance needs
+  - Avoiding vendor lock-in
+  - Have operational expertise
+
+Choose Managed Service (Tabular) When:
+  - Want enterprise features without complexity
+  - Performance optimization is critical
+  - Limited internal expertise
+  - Willing to pay premium for convenience
+```
+
+#### Migration Path
+
+```
+Phase 1: Start Simple
+├── AWS Glue Catalog
+├── S3 Tables for management
+└── Snowflake external integration
+
+Phase 2: Add Governance
+├── Evaluate governance requirements
+├── Consider Lake Formation integration
+└── Implement basic access controls
+
+Phase 3: Scale & Optimize
+├── Assess multi-engine needs
+├── Evaluate REST catalog benefits
+└── Plan migration if needed
+
+Phase 4: Enterprise Ready
+├── Implement advanced governance
+├── Add audit and compliance
+└── Optimize for performance
+```
+
+---
+
+## 4. S3 Tables: AWS Managed Iceberg 🚀
 
 ### The AWS Solution to Iceberg Maintenance
 
@@ -251,7 +657,7 @@ ORDER BY event_date DESC, event_count DESC;
 
 ---
 
-## 4. Snowflake Integration Strategy ❄️
+## 5. Snowflake Integration Strategy ❄️
 
 ### The Evolution: From Internal to External
 
@@ -399,7 +805,7 @@ CREATE MASKING POLICY pii_mask AS (val STRING) RETURNS STRING ->
 
 ---
 
-## 5. Cost & Performance Analysis 📊
+## 6. Cost & Performance Analysis 📊
 
 ### Real-World Cost Comparison
 
@@ -559,7 +965,7 @@ Hybrid Architecture Results:
 
 ---
 
-## 6. The Open Ecosystem 🌐
+## 7. The Open Ecosystem 🌐
 
 ### Iceberg REST API: Universal Data Access
 
@@ -682,7 +1088,7 @@ Data Pipeline Strategy:
 
 ---
 
-## 7. Live Demo �
+## 8. Live Demo �
 
 ### Demo Architecture
 

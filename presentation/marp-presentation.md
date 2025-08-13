@@ -34,13 +34,14 @@ style: |
 
 # Agenda
 
-1. **The Integration Challenge** <span class="aws-orange">(5 min)</span>
-2. **Apache Iceberg: The Foundation** <span class="aws-orange">(10 min)</span>
-3. **S3 Tables: AWS Managed Iceberg** <span class="aws-orange">(8 min)</span>
-4. **Snowflake Integration Strategy** <span class="aws-orange">(10 min)</span>
-5. **Cost & Performance Analysis** <span class="aws-orange">(5 min)</span>
-6. **The Open Ecosystem** <span class="aws-orange">(2 min)</span>
-7. **Live Demo** <span class="aws-orange">(10 min)</span>
+1. **The Integration Challenge** <span class="aws-orange">(4 min)</span>
+2. **Apache Iceberg: The Foundation** <span class="aws-orange">(8 min)</span>
+3. **Iceberg Metadata Deep Dive** <span class="aws-orange">(8 min)</span>
+4. **S3 Tables: AWS Managed Iceberg** <span class="aws-orange">(6 min)</span>
+5. **Snowflake Integration Strategy** <span class="aws-orange">(8 min)</span>
+6. **Cost & Performance Analysis** <span class="aws-orange">(4 min)</span>
+7. **The Open Ecosystem** <span class="aws-orange">(2 min)</span>
+8. **Live Demo** <span class="aws-orange">(10 min)</span>
 
 ---
 
@@ -175,7 +176,138 @@ Result: 288 files/day × 365 days = 105,120 files/year!
 
 ---
 
-# 🚀 3. S3 Tables: AWS Managed Iceberg
+# 🔍 3. Iceberg Metadata Deep Dive
+
+---
+
+## The Iceberg Metadata System on S3
+
+### Three-Layer Architecture
+
+```
+TABLE METADATA (v1.metadata.json)
+├── Schema, Partition Spec, Sort Order
+├── Current Snapshot ID
+└── Snapshot History
+         │
+         ▼
+SNAPSHOT METADATA (snap-12345.avro)
+├── Snapshot ID & Timestamp
+├── Operation Summary
+└── Manifest List Location
+         │
+         ▼
+MANIFEST FILES (manifest-abc.avro)
+├── Data File Paths & Partition Values
+├── Record Counts & File Sizes
+└── Column Statistics
+         │
+         ▼
+DATA FILES (file-001.parquet)
+```
+
+---
+
+## How Metadata Enables ACID on S3
+
+### The Atomic Commit Process
+
+1. **Writer prepares new data files**
+   - Writes: `s3://bucket/table/data/new-file-001.parquet`
+
+2. **Writer creates new manifest**
+   - Writes: `s3://bucket/table/metadata/manifest-new.avro`
+
+3. **Writer creates new snapshot**
+   - Writes: `s3://bucket/table/metadata/snap-67890.avro`
+
+4. **Writer updates table metadata (ATOMIC)**
+   - Writes: `s3://bucket/table/metadata/v2.metadata.json`
+
+<span class="highlight">**Key insight:** Only step 4 is atomic. If it fails, no partial state is visible.</span>
+
+---
+
+## Metadata Growth Challenge
+
+### Real-World Example
+
+```
+Streaming Table (1 insert/minute):
+├── Day 1: 1,440 snapshots + manifests
+├── Week 1: 10,080 snapshots + manifests  
+├── Month 1: 43,200 snapshots + manifests
+└── Year 1: 525,600 snapshots + manifests
+
+Metadata Storage: 78GB/year just for metadata!
+Query Planning: 43,203 S3 API calls for 1 month of data!
+```
+
+---
+
+## Self-Managed vs S3 Tables
+
+<div class="columns">
+<div>
+
+### Self-Managed Iceberg
+**What You Manage:**
+- ❌ Manifest file consolidation
+- ❌ Snapshot expiration policies
+- ❌ Orphan file cleanup
+- ❌ Performance optimization
+- ❌ Monitoring & alerting
+- ❌ Compute for maintenance
+
+</div>
+<div>
+
+### S3 Tables Managed
+**What AWS Manages:**
+- ✅ Automatic manifest compaction
+- ✅ Snapshot expiration
+- ✅ Orphan file cleanup
+- ✅ File size optimization
+- ✅ Built-in monitoring
+- ✅ 99.9% availability SLA
+
+</div>
+</div>
+
+---
+
+## Catalog Ecosystem Comparison
+
+| Catalog | Use Case | Pros | Cons |
+|---------|----------|------|------|
+| **AWS Glue** | AWS-native | ✅ Serverless<br>✅ Cost-effective | ❌ AWS-only<br>❌ Basic governance |
+| **REST Catalog** | Multi-cloud | ✅ Fine-grained security<br>✅ Vendor agnostic | ❌ More complex<br>❌ Additional infrastructure |
+| **Apache Polaris** | Open source | ✅ Open source<br>✅ Full control | ❌ Self-managed<br>❌ Operational overhead |
+
+---
+
+## Choosing Your Catalog Strategy
+
+### Decision Matrix
+
+**Choose AWS Glue When:**
+- Primarily AWS-based architecture
+- Simple governance requirements
+- Cost optimization priority
+
+**Choose REST Catalog When:**
+- Multi-cloud architecture
+- Advanced governance needs
+- Fine-grained security required
+
+**Choose Apache Polaris When:**
+- Open source preference
+- Full control requirements
+- Avoiding vendor lock-in
+
+---
+
+# 🚀 4. S3 Tables: AWS Managed Iceberg
 
 ---
 
@@ -236,7 +368,7 @@ Result: 288 files/day × 365 days = 105,120 files/year!
 
 ---
 
-# ❄️ 4. Snowflake Integration Strategy
+# ❄️ 5. Snowflake Integration Strategy
 
 ---
 
@@ -273,7 +405,7 @@ WHERE timestamp < CURRENT_DATE - 30;
 
 ---
 
-# 📊 5. Cost & Performance Analysis
+# 📊 6. Cost & Performance Analysis
 
 ---
 
@@ -325,7 +457,7 @@ WHERE timestamp < CURRENT_DATE - 30;
 
 ---
 
-# 🌐 6. The Open Ecosystem
+# 🌐 7. The Open Ecosystem
 
 ---
 
@@ -364,7 +496,7 @@ WHERE timestamp < CURRENT_DATE - 30;
 
 ---
 
-# 🎬 7. Live Demo
+# 🎬 8. Live Demo
 
 ---
 
