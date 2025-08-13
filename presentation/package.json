@@ -1,0 +1,15 @@
+{
+  "name": "iceberg-snowflake-presentation",
+  "version": "1.0.0",
+  "description": "Building a Scalable Data Platform with S3 Tables, Iceberg and Snowflake",
+  "scripts": {
+    "start": "npx http-server . -p 8080 -o",
+    "dev": "npx live-server . --port=8080",
+    "build": "node convert-markdown.js"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "live-server": "^1.2.2",
+    "marked": "^9.1.6"
+  }
+}
