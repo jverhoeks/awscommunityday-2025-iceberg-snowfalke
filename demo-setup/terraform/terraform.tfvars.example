@@ -1,0 +1,11 @@
+# Copy this file to terraform.tfvars and fill in your values
+
+# AWS Configuration
+aws_region = "us-west-2"
+project_name = "iceberg-demo"
+
+# Snowflake Configuration
+snowflake_account = "your-account.region"  # e.g., "abc12345.us-west-2"
+snowflake_username = "your-username"
+snowflake_password = "your-password"
+snowflake_external_id = "your-external-id"  # Generate a unique string for security
